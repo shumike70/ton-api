@@ -1,4 +1,4 @@
-import { TonClient, WalletContractV4, internal, toNano } from "@ton/ton";
+import { TonClient4, WalletContractV4, internal, toNano } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
 
 export default async function handler(req, res) {
@@ -12,17 +12,16 @@ export default async function handler(req, res) {
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters." });
+    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
     const keyPair = await mnemonicToPrivateKey(mnemonic);
 
-    // 🔑 Toncenter with API Key (429 Rate limit bypass)
-    const client = new TonClient({
-      endpoint: "https://toncenter.com/api/v2/jsonRPC",
-      apiKey: "f0799ea483d8a52ea5ff0552b75a6c3dd795db2e62e086f68748d5d1ea882367"
+    // 🚀 Tonhub V4 Public RPC (No API Key needed, 100% Free & Unlimited)
+    const client = new TonClient4({
+      endpoint: "https://mainnet-v4.tonhubapi.com"
     });
 
     const workchain = 0;
