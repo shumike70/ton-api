@@ -1,4 +1,4 @@
-import { TonClient4, WalletContractV4, internal, toNano } from "@ton/ton";
+import { TonClient4, WalletContractV4, internal, toNano, fromNano } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
 
 export default async function handler(req, res) {
@@ -12,14 +12,13 @@ export default async function handler(req, res) {
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
+    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters." });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
     const keyPair = await mnemonicToPrivateKey(mnemonic);
 
-    // 🚀 Tonhub V4 Public RPC (No API Key needed, 100% Free & Unlimited)
     const client = new TonClient4({
       endpoint: "https://mainnet-v4.tonhubapi.com"
     });
@@ -28,12 +27,18 @@ export default async function handler(req, res) {
     const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
     const contract = client.open(wallet);
 
-    let seqno = 0;
-    try {
-      seqno = await contract.getSeqno();
-    } catch (e) {
-      seqno = 0;
+    // চেক করা সেন্ডার ওয়ালেটে ব্যালেন্স আছে কিনা
+    const balance = await contract.getBalance();
+    const balanceInTon = parseFloat(fromNano(balance));
+
+    if (balanceInTon < parseFloat(amount)) {
+      return res.status(200).json({
+        ok: false,
+        error: `Insufficient Sender Balance! Your Bot Sender Wallet (${wallet.address.toString()}) has only ${balanceInTon} TON. Please deposit funds into this address.`
+      });
     }
+
+    const seqno = await contract.getSeqno().catch(() => 0);
 
     // Send Transfer
     await contract.sendTransfer({
@@ -52,8 +57,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       status: "success",
-      wallet_address: wallet.address.toString(),
-      tx_hash: `TX_${Date.now()}`
+      sender_wallet: wallet.address.toString(),
+      tx_hash: `https://tonscan.org/address/${wallet.address.toString()}`
     });
 
   } catch (err) {
