@@ -19,9 +19,10 @@ export default async function handler(req, res) {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
     const keyPair = await mnemonicToPrivateKey(mnemonic);
 
-    // 100% Stable Official RPC
+    // 🔑 Toncenter with API Key (429 Rate limit bypass)
     const client = new TonClient({
-      endpoint: "https://toncenter.com/api/v2/jsonRPC"
+      endpoint: "https://toncenter.com/api/v2/jsonRPC",
+      apiKey: "f0799ea483d8a52ea5ff0552b75a6c3dd795db2e62e086f68748d5d1ea882367"
     });
 
     const workchain = 0;
