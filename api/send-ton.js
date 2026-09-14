@@ -1,7 +1,9 @@
-const TonWeb = require("tonweb");
-const tonMnemonic = require("tonweb-mnemonic");
+import { TonClient, WalletContractV4, internal, toNano, Address, beginCell } from "@ton/ton";
+import { mnemonicToPrivateKey } from "@ton/crypto";
 
-module.exports = async (req, res) => {
+const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
+
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -12,70 +14,95 @@ module.exports = async (req, res) => {
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing parameters: seed, to, or amount" });
+    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
     if (mnemonic.length !== 24 && mnemonic.length !== 12) {
-      return res.status(200).json({ ok: false, error: `Invalid seed length (${mnemonic.length} words)` });
+      return res.status(200).json({ ok: false, error: `Invalid seed word count (${mnemonic.length} words). Must be 24 words.` });
     }
 
-    const keyPair = await tonMnemonic.mnemonicToKeyPair(mnemonic);
-    const tonweb = new TonWeb(new TonWeb.HttpProvider("https://toncenter.com/api/v2/jsonRPC"));
+    let keyPair;
+    try {
+      keyPair = await mnemonicToPrivateKey(mnemonic);
+    } catch (e) {
+      return res.status(200).json({ ok: false, error: `Invalid Seed/Mnemonic phrase: ${e.message}. Please check words spelling.` });
+    }
 
-    // Wallet V4R2
-    const WalletClass = tonweb.wallet.all.v4R2;
-    const wallet = new WalletClass(tonweb.provider, {
-      publicKey: keyPair.publicKey,
-      wc: 0
+    const client = new TonClient({
+      endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
-    const walletAddress = await wallet.getAddress();
+    const workchain = 0;
+    const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
+    const contract = client.open(wallet);
+
     let seqno = 0;
     try {
-      seqno = (await wallet.methods.seqno().call()) || 0;
+      seqno = await contract.getSeqno();
     } catch (e) {
       seqno = 0;
     }
 
-    // Official GRAM Token Minter
-    const minterAddress = new TonWeb.utils.Address("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
-    const jettonMinter = new TonWeb.token.jetton.JettonMinter(tonweb.provider, {
-      address: minterAddress
-    });
+    // Resolve GRAM Jetton Wallet
+    let senderJettonWallet;
+    try {
+      const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
+        { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
+      ]);
+      senderJettonWallet = jettonData.stack.readAddress();
+    } catch (e) {
+      return res.status(200).json({
+        ok: false,
+        error: `Could not resolve GRAM Jetton Wallet. Wallet: ${wallet.address.toString()}`
+      });
+    }
 
-    // Resolve Sender GRAM Jetton Wallet
-    const jettonWalletAddress = await jettonMinter.getJettonWalletAddress(walletAddress);
-    const jettonWallet = new TonWeb.token.jetton.JettonWallet(tonweb.provider, {
-      address: jettonWalletAddress
-    });
+    // Comment
+    const forwardPayload = beginCell()
+      .storeUint(0, 32)
+      .storeStringTail(comment ? comment.toString() : "GRAM Payout")
+      .endCell();
 
-    // Send GRAM Transfer
-    const transfer = jettonWallet.methods.transfer({
+    // Jetton Body
+    const jettonBody = beginCell()
+      .storeUint(0xf8a70085, 32)
+      .storeUint(0, 64)
+      .storeCoins(toNano(amount.toString()))
+      .storeAddress(Address.parse(to.trim()))
+      .storeAddress(wallet.address)
+      .storeBit(0)
+      .storeCoins(toNano("0.01"))
+      .storeBit(1)
+      .storeRef(forwardPayload)
+      .endCell();
+
+    // Send
+    await contract.sendTransfer({
+      seqno,
       secretKey: keyPair.secretKey,
-      totalTonAmount: TonWeb.utils.toNano("0.05"),
-      jettonAmount: TonWeb.utils.toNano(amount.toString()),
-      toAddress: new TonWeb.utils.Address(to.trim()),
-      forwardTonAmount: TonWeb.utils.toNano("0.01"),
-      forwardPayload: new TextEncoder().encode(comment ? comment.toString() : "GRAM Transfer"),
-      responseAddress: walletAddress,
-      seqno: seqno
+      messages: [
+        internal({
+          to: senderJettonWallet,
+          value: toNano("0.05"),
+          body: jettonBody,
+          bounce: true
+        })
+      ]
     });
-
-    await transfer.send();
 
     return res.status(200).json({
       ok: true,
       status: "success",
-      wallet_address: walletAddress.toString(true, true, true),
+      wallet_address: wallet.address.toString(),
       tx_hash: `GRAM_${Date.now()}`
     });
 
   } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Failed to broadcast GRAM transaction"
+      error: err.message || "Transaction broadcast failed"
     });
   }
-};
+}
