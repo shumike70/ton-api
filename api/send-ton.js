@@ -1,4 +1,4 @@
-import { TonClient, WalletContractV4, WalletContractV5R1, internal, toNano, Address, beginCell } from "@ton/ton";
+import { TonClient, WalletContractV4, internal, toNano, Address, beginCell } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
 
 const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
@@ -28,20 +28,18 @@ export default async function handler(req, res) {
       endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
-    // 1. Check Wallet (W5 or V4)
-    let wallet = WalletContractV5R1.create({ workchain: 0, publicKey: keyPair.publicKey });
-    let contract = client.open(wallet);
-    let seqno = 0;
+    const workchain = 0;
+    const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
+    const contract = client.open(wallet);
 
+    let seqno = 0;
     try {
       seqno = await contract.getSeqno();
     } catch (e) {
-      wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
-      contract = client.open(wallet);
-      seqno = await contract.getSeqno().catch(() => 0);
+      seqno = 0;
     }
 
-    // 2. Resolve GRAM Jetton Wallet
+    // GRAM Jetton Wallet Address বের করা
     let senderJettonWallet;
     try {
       const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
@@ -51,16 +49,17 @@ export default async function handler(req, res) {
     } catch (e) {
       return res.status(200).json({
         ok: false,
-        error: `Could not find GRAM token in wallet: ${wallet.address.toString()}`
+        error: `Could not resolve GRAM Jetton Wallet. Wallet: ${wallet.address.toString()}`
       });
     }
 
-    // 3. Build Payload
+    // Comment Payload
     const forwardPayload = beginCell()
       .storeUint(0, 32)
-      .storeStringTail(comment ? comment.toString() : "GRAM")
+      .storeStringTail(comment ? comment.toString() : "GRAM Payout")
       .endCell();
 
+    // Jetton Transfer Body
     const jettonBody = beginCell()
       .storeUint(0xf8a70085, 32)
       .storeUint(0, 64)
@@ -73,7 +72,7 @@ export default async function handler(req, res) {
       .storeRef(forwardPayload)
       .endCell();
 
-    // 4. Send Transfer
+    // Send Transfer
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
@@ -95,10 +94,9 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    // Return error with status 200 so Telegram Bot displays the exact reason
     return res.status(200).json({
       ok: false,
-      error: err.message || "Failed to broadcast transaction on TON network"
+      error: err.message || "Failed to process TON/GRAM transaction"
     });
   }
 }
