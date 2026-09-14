@@ -19,9 +19,9 @@ export default async function handler(req, res) {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
     const keyPair = await mnemonicToPrivateKey(mnemonic);
 
-    // 🚀 High-Speed Unlimited RPC (No 429 Rate Limit)
+    // 100% Stable Official RPC
     const client = new TonClient({
-      endpoint: "https://ton.access.orbs.network/44A1c0/1/mainnet/toncenter-api-v2/jsonRPC"
+      endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
     const workchain = 0;
@@ -59,7 +59,7 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Failed to process transaction"
+      error: err.message || "Failed to broadcast transaction"
     });
   }
 }
