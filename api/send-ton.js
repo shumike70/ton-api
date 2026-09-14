@@ -1,4 +1,4 @@
-import { TonClient4, WalletContractV4, internal, toNano, fromNano } from "@ton/ton";
+import { TonClient4, WalletContractV5R1, internal, toNano, fromNano } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
 
 export default async function handler(req, res) {
@@ -12,7 +12,7 @@ export default async function handler(req, res) {
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters." });
+    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
   }
 
   try {
@@ -24,23 +24,23 @@ export default async function handler(req, res) {
     });
 
     const workchain = 0;
-    const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
+    // 💎 সরাসরি আপনার বর্তমান Tonkeeper W5 ওয়ালেট ব্যবহার করা
+    const wallet = WalletContractV5R1.create({ workchain, publicKey: keyPair.publicKey });
     const contract = client.open(wallet);
 
-    // চেক করা সেন্ডার ওয়ালেটে ব্যালেন্স আছে কিনা
     const balance = await contract.getBalance();
     const balanceInTon = parseFloat(fromNano(balance));
 
     if (balanceInTon < parseFloat(amount)) {
       return res.status(200).json({
         ok: false,
-        error: `Insufficient Sender Balance! Your Bot Sender Wallet (${wallet.address.toString()}) has only ${balanceInTon} TON. Please deposit funds into this address.`
+        error: `Insufficient Balance! Your current Tonkeeper Wallet (${wallet.address.toString()}) has only ${balanceInTon} balance.`
       });
     }
 
     const seqno = await contract.getSeqno().catch(() => 0);
 
-    // Send Transfer
+    // Send Transfer from your current wallet
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
@@ -48,7 +48,7 @@ export default async function handler(req, res) {
         internal({
           to: to.trim(),
           value: toNano(amount.toString()),
-          body: comment ? comment.toString() : "Payout",
+          body: comment ? comment.toString() : "GRAM Payout",
           bounce: false
         })
       ]
@@ -57,14 +57,14 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       status: "success",
-      sender_wallet: wallet.address.toString(),
+      wallet_address: wallet.address.toString(),
       tx_hash: `https://tonscan.org/address/${wallet.address.toString()}`
     });
 
   } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Failed to broadcast transaction"
+      error: err.message || "Failed to process transaction"
     });
   }
 }
