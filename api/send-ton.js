@@ -6,32 +6,22 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
 
   const params = req.method === "POST" ? req.body : req.query;
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters" });
+    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters." });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
-    
-    let keyPair;
-    try {
-      keyPair = await mnemonicToPrivateKey(mnemonic);
-    } catch (e) {
-      return res.status(200).json({ 
-        ok: false, 
-        error: "Your 24 seed words are INVALID! Check Tonkeeper Backup spelling." 
-      });
-    }
+    const keyPair = await mnemonicToPrivateKey(mnemonic);
 
+    // 🚀 High-Speed Unlimited RPC (No 429 Rate Limit)
     const client = new TonClient({
-      endpoint: "https://toncenter.com/api/v2/jsonRPC"
+      endpoint: "https://ton.access.orbs.network/44A1c0/1/mainnet/toncenter-api-v2/jsonRPC"
     });
 
     const workchain = 0;
@@ -45,7 +35,7 @@ export default async function handler(req, res) {
       seqno = 0;
     }
 
-    // Send TON / GRAM
+    // Send Transfer
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
@@ -69,7 +59,7 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: err.message || "Failed to process blockchain transfer"
+      error: err.message || "Failed to process transaction"
     });
   }
 }
