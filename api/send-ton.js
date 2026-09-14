@@ -6,49 +6,56 @@ const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
   const { seed, to, amount, comment } = req.method === "POST" ? req.body : req.query;
 
   if (!seed || !to || !amount) {
-    return res.status(400).json({ ok: false, error: "Missing seed, to or amount" });
+    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
+    if (mnemonic.length !== 24 && mnemonic.length !== 12) {
+      return res.status(200).json({ ok: false, error: `Invalid seed word count (${mnemonic.length} words). Must be 24.` });
+    }
+
     const keyPair = await mnemonicToPrivateKey(mnemonic);
 
     const client = new TonClient({
       endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
-    // 1. Check W5 Wallet First
+    // 1. Check Wallet (W5 or V4)
     let wallet = WalletContractV5R1.create({ workchain: 0, publicKey: keyPair.publicKey });
     let contract = client.open(wallet);
-    let balance = await contract.getBalance();
-
-    // 2. Check V4 Wallet if W5 is empty
-    if (balance === 0n) {
-      wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
-      contract = client.open(wallet);
-      balance = await contract.getBalance();
-    }
-
-    // Check seqno
     let seqno = 0;
+
     try {
       seqno = await contract.getSeqno();
     } catch (e) {
-      seqno = 0;
+      wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
+      contract = client.open(wallet);
+      seqno = await contract.getSeqno().catch(() => 0);
     }
 
-    // 3. Resolve GRAM Jetton Wallet
-    const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
-      { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
-    ]);
-    const senderJettonWallet = jettonData.stack.readAddress();
+    // 2. Resolve GRAM Jetton Wallet
+    let senderJettonWallet;
+    try {
+      const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
+        { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
+      ]);
+      senderJettonWallet = jettonData.stack.readAddress();
+    } catch (e) {
+      return res.status(200).json({
+        ok: false,
+        error: `Could not find GRAM token in wallet: ${wallet.address.toString()}`
+      });
+    }
 
+    // 3. Build Payload
     const forwardPayload = beginCell()
       .storeUint(0, 32)
       .storeStringTail(comment ? comment.toString() : "GRAM")
@@ -66,7 +73,7 @@ export default async function handler(req, res) {
       .storeRef(forwardPayload)
       .endCell();
 
-    // Send transaction
+    // 4. Send Transfer
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
@@ -83,14 +90,15 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       status: "success",
-      wallet_used: wallet.address.toString(),
+      wallet_address: wallet.address.toString(),
       tx_hash: `GRAM_${Date.now()}`
     });
 
   } catch (err) {
-    return res.status(500).json({
+    // Return error with status 200 so Telegram Bot displays the exact reason
+    return res.status(200).json({
       ok: false,
-      error: err.message || JSON.stringify(err)
+      error: err.message || "Failed to broadcast transaction on TON network"
     });
   }
 }
