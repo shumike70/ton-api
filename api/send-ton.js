@@ -1,23 +1,18 @@
-import { TonClient, WalletContractV4, WalletContractV5R1, internal, toNano, fromNano } from "@ton/ton";
+import { TonClient, WalletContractV4, WalletContractV5R1, internal, toNano, Address, beginCell } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
+
+const GRAM_MASTER = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
 
-  const params = req.method === "POST" ? req.body : req.query;
-  const { seed, to, amount, comment } = params || {};
+  const { seed, to, amount, comment } = req.method === "POST" ? req.body : req.query;
 
   if (!seed || !to || !amount) {
-    return res.status(400).json({
-      ok: false,
-      error: "Missing parameters: 'seed', 'to', and 'amount' are required."
-    });
+    return res.status(400).json({ ok: false, error: "Missing seed, to or amount" });
   }
 
   try {
@@ -28,37 +23,59 @@ export default async function handler(req, res) {
       endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
-    const workchain = 0;
-
-    // Tonkeeper এর W5 এবং V4 দুটোই অটো-ডিটেক্ট করবে
-    let wallet = WalletContractV5R1.create({ workchain, publicKey: keyPair.publicKey });
+    // 1. Check W5 Wallet First
+    let wallet = WalletContractV5R1.create({ workchain: 0, publicKey: keyPair.publicKey });
     let contract = client.open(wallet);
     let balance = await contract.getBalance();
 
-    // W5 এ ব্যালেন্স না পেলে V4R2 চেক করবে
+    // 2. Check V4 Wallet if W5 is empty
     if (balance === 0n) {
-      const v4Wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
-      const v4Contract = client.open(v4Wallet);
-      const v4Balance = await v4Contract.getBalance();
-      if (v4Balance > 0n) {
-        wallet = v4Wallet;
-        contract = v4Contract;
-        balance = v4Balance;
-      }
+      wallet = WalletContractV4.create({ workchain: 0, publicKey: keyPair.publicKey });
+      contract = client.open(wallet);
+      balance = await contract.getBalance();
     }
 
-    const seqno = await contract.getSeqno().catch(() => 0);
+    // Check seqno
+    let seqno = 0;
+    try {
+      seqno = await contract.getSeqno();
+    } catch (e) {
+      seqno = 0;
+    }
 
-    // সরাসরি ব্যালেন্স থেকে ট্রান্সফার
+    // 3. Resolve GRAM Jetton Wallet
+    const jettonData = await client.runMethod(GRAM_MASTER, "get_wallet_address", [
+      { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
+    ]);
+    const senderJettonWallet = jettonData.stack.readAddress();
+
+    const forwardPayload = beginCell()
+      .storeUint(0, 32)
+      .storeStringTail(comment ? comment.toString() : "GRAM")
+      .endCell();
+
+    const jettonBody = beginCell()
+      .storeUint(0xf8a70085, 32)
+      .storeUint(0, 64)
+      .storeCoins(toNano(amount.toString()))
+      .storeAddress(Address.parse(to.trim()))
+      .storeAddress(wallet.address)
+      .storeBit(0)
+      .storeCoins(toNano("0.01"))
+      .storeBit(1)
+      .storeRef(forwardPayload)
+      .endCell();
+
+    // Send transaction
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
       messages: [
         internal({
-          to: to.trim(),
-          value: toNano(amount.toString()),
-          body: comment ? comment.toString() : "GRAM Transfer",
-          bounce: false
+          to: senderJettonWallet,
+          value: toNano("0.05"),
+          body: jettonBody,
+          bounce: true
         })
       ]
     });
@@ -66,14 +83,14 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       status: "success",
-      detected_balance: fromNano(balance),
+      wallet_used: wallet.address.toString(),
       tx_hash: `GRAM_${Date.now()}`
     });
 
-  } catch (error) {
+  } catch (err) {
     return res.status(500).json({
       ok: false,
-      error: error.message || "Failed to process transaction"
+      error: err.message || JSON.stringify(err)
     });
   }
 }
