@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "/send-ton",
+      "dest": "/api/send-ton.js"
+    }
+  ]
+}
