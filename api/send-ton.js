@@ -1,8 +1,5 @@
-import { TonClient, WalletContractV4, WalletContractV5R1, internal, toNano, Address, beginCell } from "@ton/ton";
+import { TonClient, WalletContractV4, WalletContractV5R1, internal, toNano, fromNano } from "@ton/ton";
 import { mnemonicToPrivateKey } from "@ton/crypto";
-
-// Official GRAM Token Master Address on TON
-const GRAM_MASTER_ADDRESS = Address.parse("EQC47093oX5Xhb0xuk2hCr2OnkWyt9jiWqKazWNYqnOwf-AO");
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -32,56 +29,36 @@ export default async function handler(req, res) {
     });
 
     const workchain = 0;
-    
-    // Tonkeeper W5 এবং V4 দুটোই চেক করা
+
+    // Tonkeeper এর W5 এবং V4 দুটোই অটো-ডিটেক্ট করবে
     let wallet = WalletContractV5R1.create({ workchain, publicKey: keyPair.publicKey });
     let contract = client.open(wallet);
-    let seqno = 0;
+    let balance = await contract.getBalance();
 
-    try {
-      seqno = await contract.getSeqno();
-    } catch (e) {
-      // W5 এ না পেলে V4 ট্রাই করবে
-      wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
-      contract = client.open(wallet);
-      seqno = await contract.getSeqno();
+    // W5 এ ব্যালেন্স না পেলে V4R2 চেক করবে
+    if (balance === 0n) {
+      const v4Wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
+      const v4Contract = client.open(v4Wallet);
+      const v4Balance = await v4Contract.getBalance();
+      if (v4Balance > 0n) {
+        wallet = v4Wallet;
+        contract = v4Contract;
+        balance = v4Balance;
+      }
     }
 
-    // ১. GRAM Jetton ওয়ালেট বের করা
-    const jettonData = await client.runMethod(GRAM_MASTER_ADDRESS, "get_wallet_address", [
-      { type: "slice", cell: beginCell().storeAddress(wallet.address).endCell() }
-    ]);
-    const senderJettonWallet = jettonData.stack.readAddress();
+    const seqno = await contract.getSeqno().catch(() => 0);
 
-    // ২. মেমো তৈরি
-    const forwardPayload = beginCell()
-      .storeUint(0, 32)
-      .storeStringTail(comment ? comment.toString() : "GRAM Payout")
-      .endCell();
-
-    // ৩. Jetton Transfer Payload
-    const jettonTransferBody = beginCell()
-      .storeUint(0xf8a70085, 32)
-      .storeUint(0, 64)
-      .storeCoins(toNano(amount.toString()))
-      .storeAddress(Address.parse(to.trim()))
-      .storeAddress(wallet.address)
-      .storeBit(0)
-      .storeCoins(toNano("0.01"))
-      .storeBit(1)
-      .storeRef(forwardPayload)
-      .endCell();
-
-    // ৪. সেন্ড করা
+    // সরাসরি ব্যালেন্স থেকে ট্রান্সফার
     await contract.sendTransfer({
       seqno,
       secretKey: keyPair.secretKey,
       messages: [
         internal({
-          to: senderJettonWallet,
-          value: toNano("0.05"),
-          body: jettonTransferBody,
-          bounce: true
+          to: to.trim(),
+          value: toNano(amount.toString()),
+          body: comment ? comment.toString() : "GRAM Transfer",
+          bounce: false
         })
       ]
     });
@@ -89,14 +66,14 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       status: "success",
-      message: "GRAM Token sent successfully",
+      detected_balance: fromNano(balance),
       tx_hash: `GRAM_${Date.now()}`
     });
 
   } catch (error) {
     return res.status(500).json({
       ok: false,
-      error: error.message || "Failed to process GRAM transaction"
+      error: error.message || "Failed to process transaction"
     });
   }
 }
