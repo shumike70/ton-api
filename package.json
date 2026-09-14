@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@ton/ton": "13.11.1",
-    "@ton/crypto": "3.2.0"
+    "@ton/ton": "^14.0.0",
+    "@ton/crypto": "^3.3.0"
   }
 }
