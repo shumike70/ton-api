@@ -1,72 +1,75 @@
-const TonWeb = require("tonweb");
-const tonMnemonic = require("tonweb-mnemonic");
+import { TonClient, WalletContractV4, internal, toNano } from "@ton/ton";
+import { mnemonicToPrivateKey } from "@ton/crypto";
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
 
   const params = req.method === "POST" ? req.body : req.query;
   const { seed, to, amount, comment } = params || {};
 
   if (!seed || !to || !amount) {
-    return res.status(200).json({ ok: false, error: "Missing parameters: 'seed', 'to', or 'amount'." });
+    return res.status(200).json({ ok: false, error: "Missing seed, to, or amount parameters" });
   }
 
   try {
     const mnemonic = decodeURIComponent(seed).trim().split(/\s+/);
-
-    // ২৪ শব্দ ঠিক আছে কিনা ভ্যালিডেট করা
-    const isValid = await tonMnemonic.validateMnemonic(mnemonic);
-    if (!isValid) {
-      return res.status(200).json({
-        ok: false,
-        error: "Your 24-word Seed phrase is INVALID! Please check spelling in Tonkeeper Backup."
+    
+    let keyPair;
+    try {
+      keyPair = await mnemonicToPrivateKey(mnemonic);
+    } catch (e) {
+      return res.status(200).json({ 
+        ok: false, 
+        error: "Your 24 seed words are INVALID! Check Tonkeeper Backup spelling." 
       });
     }
 
-    const keyPair = await tonMnemonic.mnemonicToKeyPair(mnemonic);
-    const tonweb = new TonWeb(new TonWeb.HttpProvider("https://toncenter.com/api/v2/jsonRPC"));
-
-    const WalletClass = tonweb.wallet.all.v4R2;
-    const wallet = new WalletClass(tonweb.provider, {
-      publicKey: keyPair.publicKey,
-      wc: 0
+    const client = new TonClient({
+      endpoint: "https://toncenter.com/api/v2/jsonRPC"
     });
 
-    const walletAddress = await wallet.getAddress();
+    const workchain = 0;
+    const wallet = WalletContractV4.create({ workchain, publicKey: keyPair.publicKey });
+    const contract = client.open(wallet);
+
     let seqno = 0;
     try {
-      seqno = (await wallet.methods.seqno().call()) || 0;
+      seqno = await contract.getSeqno();
     } catch (e) {
       seqno = 0;
     }
 
-    // ট্রানজ্যাকশন তৈরি ও সেন্ড করা
-    const transfer = wallet.methods.transfer({
+    // Send TON / GRAM
+    await contract.sendTransfer({
+      seqno,
       secretKey: keyPair.secretKey,
-      toAddress: to.trim(),
-      amount: TonWeb.utils.toNano(amount.toString()),
-      seqno: seqno,
-      payload: comment ? comment.toString() : "Payout",
-      sendMode: 3
+      messages: [
+        internal({
+          to: to.trim(),
+          value: toNano(amount.toString()),
+          body: comment ? comment.toString() : "Payout",
+          bounce: false
+        })
+      ]
     });
-
-    await transfer.send();
 
     return res.status(200).json({
       ok: true,
       status: "success",
-      wallet_address: walletAddress.toString(true, true, true),
+      wallet_address: wallet.address.toString(),
       tx_hash: `TX_${Date.now()}`
     });
 
-  } catch (error) {
+  } catch (err) {
     return res.status(200).json({
       ok: false,
-      error: error.message || "Failed to broadcast transaction"
+      error: err.message || "Failed to process blockchain transfer"
     });
   }
-};
+}
